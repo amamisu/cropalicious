@@ -11,8 +11,6 @@ namespace Cropalicious
 {
     public class OverlayWindow : Form
     {
-        #region COM Interop for Composition
-
         [ComImport, Guid("25297D5C-3AD4-4C9C-B5CF-E36A38512330"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface ICompositorInterop
         {
@@ -40,7 +38,6 @@ namespace Cropalicious
             [In] DispatcherQueueOptions options,
             [Out] out IntPtr dispatcherQueueController);
 
-        // Get IUnknown from WinRT object
         [DllImport("api-ms-win-core-winrt-l1-1-0.dll", PreserveSig = true)]
         private static extern int RoGetActivationFactory(
             IntPtr activatableClassId,
@@ -52,11 +49,9 @@ namespace Cropalicious
 
         private static DesktopWindowTarget CreateDesktopWindowTarget(Compositor compositor, IntPtr hwnd, bool isTopmost)
         {
-            // Get IUnknown for the compositor
             IntPtr compositorPtr = Marshal.GetIUnknownForObject(compositor);
             try
             {
-                // Query for ICompositorDesktopInterop
                 Guid iid = new Guid("29E691FA-4567-4DCA-B319-D0F207EB6807");
                 int hr = Marshal.QueryInterface(compositorPtr, in iid, out IntPtr interopPtr);
                 if (hr != 0)
@@ -64,11 +59,9 @@ namespace Cropalicious
 
                 try
                 {
-                    // Get the interop interface and call CreateDesktopWindowTarget
                     var interop = (ICompositorDesktopInterop)Marshal.GetObjectForIUnknown(interopPtr);
                     interop.CreateDesktopWindowTarget(hwnd, isTopmost, out IntPtr targetPtr);
 
-                    // Convert to DesktopWindowTarget using WinRT marshaling
                     var target = MarshalInterface<DesktopWindowTarget>.FromAbi(targetPtr);
                     Marshal.Release(targetPtr);
                     return target;
@@ -83,10 +76,6 @@ namespace Cropalicious
                 Marshal.Release(compositorPtr);
             }
         }
-
-        #endregion
-
-        #region Win32 API
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmFlush();
@@ -103,22 +92,21 @@ namespace Cropalicious
         private const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 
         private const int WM_NCHITTEST = 0x0084;
+        private const int WM_CONTEXTMENU = 0x007B;
         private const int HTCLIENT = 1;
-
-        #endregion
 
         private readonly AppSettings settings;
         private Point lastMousePos;
+        private bool rightClickCancelPending;
 
-        // Composition
-        private IntPtr dispatcherQueueController;
+        private static IntPtr sharedDispatcherQueueController;
+        private static bool dispatcherQueueInitialized;
         private Compositor? compositor;
         private DesktopWindowTarget? desktopWindowTarget;
         private ContainerVisual? rootVisual;
         private CompositionColorBrush? greenBrush;
         private CompositionColorBrush? whiteBrush;
 
-        // Border visuals (4 sides + 8 corner segments)
         private SpriteVisual? borderTop;
         private SpriteVisual? borderBottom;
         private SpriteVisual? borderLeft;
@@ -142,7 +130,6 @@ namespace Cropalicious
             get
             {
                 CreateParams cp = base.CreateParams;
-                // Enable DirectComposition
                 cp.ExStyle |= WS_EX_NOREDIRECTIONBITMAP;
                 return cp;
             }
@@ -160,7 +147,6 @@ namespace Cropalicious
             Cursor = Cursors.Cross;
             KeyPreview = true;
 
-            // Make window background transparent
             BackColor = Color.Black;
             TransparencyKey = Color.Black;
         }
@@ -173,31 +159,18 @@ namespace Cropalicious
 
         private void InitializeComposition()
         {
-            // Create dispatcher queue for the current thread
-            var options = new DispatcherQueueOptions
-            {
-                dwSize = Marshal.SizeOf<DispatcherQueueOptions>(),
-                threadType = DQTYPE_THREAD_CURRENT,
-                apartmentType = DQTAT_COM_STA
-            };
+            EnsureDispatcherQueue();
 
-            CreateDispatcherQueueController(options, out dispatcherQueueController);
-
-            // Create compositor
             compositor = new Compositor();
 
-            // Use the WinRT interop extension method approach
             desktopWindowTarget = CreateDesktopWindowTarget(compositor, Handle, true);
 
-            // Create root container visual
             rootVisual = compositor.CreateContainerVisual();
             desktopWindowTarget.Root = rootVisual;
 
-            // Create brushes
-            greenBrush = compositor.CreateColorBrush(Windows.UI.Color.FromArgb(255, 0, 255, 0)); // Lime green
-            whiteBrush = compositor.CreateColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255)); // White
+            greenBrush = compositor.CreateColorBrush(Windows.UI.Color.FromArgb(255, 0, 255, 0));
+            whiteBrush = compositor.CreateColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255));
 
-            // Create border visuals (4 sides of the rectangle)
             borderTop = compositor.CreateSpriteVisual();
             borderTop.Brush = greenBrush;
 
@@ -215,7 +188,6 @@ namespace Cropalicious
             rootVisual.Children.InsertAtTop(borderLeft);
             rootVisual.Children.InsertAtTop(borderRight);
 
-            // Create corner visuals (8 segments: 2 per corner)
             cornerVisuals = new SpriteVisual[8];
             for (int i = 0; i < 8; i++)
             {
@@ -225,6 +197,27 @@ namespace Cropalicious
             }
 
             lastMousePos = MousePosition;
+        }
+
+        private static void EnsureDispatcherQueue()
+        {
+            if (dispatcherQueueInitialized)
+                return;
+
+            var options = new DispatcherQueueOptions
+            {
+                dwSize = Marshal.SizeOf<DispatcherQueueOptions>(),
+                threadType = DQTYPE_THREAD_CURRENT,
+                apartmentType = DQTAT_COM_STA
+            };
+
+            var hr = CreateDispatcherQueueController(options, out sharedDispatcherQueueController);
+            if (hr != 0)
+                Marshal.ThrowExceptionForHR(hr);
+            if (sharedDispatcherQueueController == IntPtr.Zero)
+                throw new InvalidOperationException("Failed to create composition dispatcher queue.");
+
+            dispatcherQueueInitialized = true;
         }
 
         protected override void OnShown(EventArgs e)
@@ -288,43 +281,33 @@ namespace Cropalicious
             var width = settings.CaptureWidth;
             var height = settings.CaptureHeight;
 
-            // Update border positions
-            // Top border
             borderTop!.Offset = new Vector3(x, y, 0);
             borderTop.Size = new Vector2(width, BorderThickness);
 
-            // Bottom border
             borderBottom!.Offset = new Vector3(x, y + height - BorderThickness, 0);
             borderBottom.Size = new Vector2(width, BorderThickness);
 
-            // Left border
             borderLeft!.Offset = new Vector3(x, y, 0);
             borderLeft.Size = new Vector2(BorderThickness, height);
 
-            // Right border
             borderRight!.Offset = new Vector3(x + width - BorderThickness, y, 0);
             borderRight.Size = new Vector2(BorderThickness, height);
 
-            // Update corner markers
-            // Top-left corner (horizontal + vertical)
             cornerVisuals![0].Offset = new Vector3(x, y, 0);
             cornerVisuals[0].Size = new Vector2(CornerLength, CornerThickness);
             cornerVisuals[1].Offset = new Vector3(x, y, 0);
             cornerVisuals[1].Size = new Vector2(CornerThickness, CornerLength);
 
-            // Top-right corner
             cornerVisuals[2].Offset = new Vector3(x + width - CornerLength, y, 0);
             cornerVisuals[2].Size = new Vector2(CornerLength, CornerThickness);
             cornerVisuals[3].Offset = new Vector3(x + width - CornerThickness, y, 0);
             cornerVisuals[3].Size = new Vector2(CornerThickness, CornerLength);
 
-            // Bottom-left corner
             cornerVisuals[4].Offset = new Vector3(x, y + height - CornerThickness, 0);
             cornerVisuals[4].Size = new Vector2(CornerLength, CornerThickness);
             cornerVisuals[5].Offset = new Vector3(x, y + height - CornerLength, 0);
             cornerVisuals[5].Size = new Vector2(CornerThickness, CornerLength);
 
-            // Bottom-right corner
             cornerVisuals[6].Offset = new Vector3(x + width - CornerLength, y + height - CornerThickness, 0);
             cornerVisuals[6].Size = new Vector2(CornerLength, CornerThickness);
             cornerVisuals[7].Offset = new Vector3(x + width - CornerThickness, y + height - CornerLength, 0);
@@ -333,43 +316,59 @@ namespace Cropalicious
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            // Composition handles all rendering
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            HandleMouseClick(e);
+            if (e.Button == MouseButtons.Left)
+            {
+                TakeScreenshot();
+                return;
+            }
+
+            if (e.Button == MouseButtons.Right)
+            {
+                rightClickCancelPending = true;
+                Capture = true;
+                return;
+            }
+
             base.OnMouseDown(e);
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
-            // Don't handle on MouseUp - already handled on MouseDown
-            base.OnMouseUp(e);
-        }
+            if (e.Button == MouseButtons.Right && rightClickCancelPending)
+            {
+                rightClickCancelPending = false;
+                Capture = false;
+                BeginInvoke(new Action(Close));
+                return;
+            }
 
-        private void HandleMouseClick(MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                TakeScreenshot();
-            }
-            else if (e.Button == MouseButtons.Right)
-            {
-                Close();
-            }
+            base.OnMouseUp(e);
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Escape)
             {
+                rightClickCancelPending = false;
+                Capture = false;
+                e.Handled = true;
+                e.SuppressKeyPress = true;
                 Close();
             }
         }
 
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == WM_CONTEXTMENU)
+            {
+                m.Result = IntPtr.Zero;
+                return;
+            }
+
             if (m.Msg == WM_NCHITTEST)
             {
                 m.Result = (IntPtr)HTCLIENT;
@@ -443,7 +442,6 @@ namespace Cropalicious
         {
             if (disposing)
             {
-                // Composition objects are reference counted, release them
                 greenBrush?.Dispose();
                 whiteBrush?.Dispose();
 

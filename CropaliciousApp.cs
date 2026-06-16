@@ -13,7 +13,13 @@ namespace Cropalicious
         private GlobalHotkey? hotkey;
         private OverlayWindow? overlayWindow;
         private MainWindow? mainWindow;
+        private Icon? trayAppIcon;
         private AppSettings settings;
+        private bool hotkeySuspendedForSettings;
+        private bool settingsAppliedWhileHotkeySuspended;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
 
         public CropaliciousApp()
         {
@@ -32,10 +38,11 @@ namespace Cropalicious
             trayMenu.Items.Add("-");
             trayMenu.Items.Add("Exit", null, OnExit);
 
+            trayAppIcon = CreateAppIcon();
             trayIcon = new NotifyIcon()
             {
                 Text = "Cropalicious",
-                Icon = CreateAppIcon(),
+                Icon = trayAppIcon,
                 ContextMenuStrip = trayMenu,
                 Visible = true
             };
@@ -80,6 +87,7 @@ namespace Cropalicious
                 }
                 overlayWindow = new OverlayWindow(settings);
                 overlayWindow.ScreenshotTaken += OnScreenshotTaken;
+                overlayWindow.FormClosed += OnOverlayWindowClosed;
                 overlayWindow.Show();
             }
         }
@@ -101,6 +109,20 @@ namespace Cropalicious
             }
         }
 
+        private void OnOverlayWindowClosed(object? sender, FormClosedEventArgs e)
+        {
+            if (sender is OverlayWindow closedOverlay)
+            {
+                closedOverlay.ScreenshotTaken -= OnScreenshotTaken;
+                closedOverlay.FormClosed -= OnOverlayWindowClosed;
+
+                if (ReferenceEquals(overlayWindow, closedOverlay))
+                {
+                    overlayWindow = null;
+                }
+            }
+        }
+
         private void OnOpen(object? sender, EventArgs e)
         {
             ShowMainWindow();
@@ -113,6 +135,8 @@ namespace Cropalicious
                 mainWindow = new MainWindow(settings);
                 mainWindow.ScreenshotTaken += OnScreenshotTaken;
                 mainWindow.FormClosed += OnMainWindowClosed;
+                mainWindow.SettingsDialogOpening += OnSettingsDialogOpening;
+                mainWindow.SettingsDialogClosed += OnSettingsDialogClosed;
                 mainWindow.SettingsChanged += OnSettingsChanged;
             }
 
@@ -127,14 +151,39 @@ namespace Cropalicious
             {
                 window.ScreenshotTaken -= OnScreenshotTaken;
                 window.FormClosed -= OnMainWindowClosed;
+                window.SettingsDialogOpening -= OnSettingsDialogOpening;
+                window.SettingsDialogClosed -= OnSettingsDialogClosed;
                 window.SettingsChanged -= OnSettingsChanged;
             }
         }
 
         private void OnSettingsChanged(object? sender, EventArgs e)
         {
-            hotkey?.Dispose();
+            DisposeHotkey();
             InitializeHotkey();
+
+            if (hotkeySuspendedForSettings)
+            {
+                settingsAppliedWhileHotkeySuspended = true;
+            }
+        }
+
+        private void OnSettingsDialogOpening(object? sender, EventArgs e)
+        {
+            hotkeySuspendedForSettings = hotkey != null;
+            settingsAppliedWhileHotkeySuspended = false;
+            DisposeHotkey();
+        }
+
+        private void OnSettingsDialogClosed(object? sender, EventArgs e)
+        {
+            if (hotkeySuspendedForSettings && !settingsAppliedWhileHotkeySuspended)
+            {
+                InitializeHotkey();
+            }
+
+            hotkeySuspendedForSettings = false;
+            settingsAppliedWhileHotkeySuspended = false;
         }
 
         private void OnSettings(object? sender, EventArgs e)
@@ -161,9 +210,18 @@ namespace Cropalicious
             Application.Exit();
         }
 
+        private void DisposeHotkey()
+        {
+            if (hotkey == null) return;
+
+            hotkey.HotkeyPressed -= OnHotkeyPressed;
+            hotkey.Dispose();
+            hotkey = null;
+        }
+
         public static Icon CreateAppIcon(int size = 16)
         {
-            var bitmap = new Bitmap(size, size);
+            using var bitmap = new Bitmap(size, size);
             using (var g = Graphics.FromImage(bitmap))
             {
                 g.Clear(Color.Black);
@@ -182,16 +240,33 @@ namespace Cropalicious
                 g.DrawLine(greenPen, e, e, e - cornerLen, e);
                 g.DrawLine(greenPen, e, e, e, e - cornerLen);
             }
-            return Icon.FromHandle(bitmap.GetHicon());
+
+            var hIcon = bitmap.GetHicon();
+            try
+            {
+                using var icon = Icon.FromHandle(hIcon);
+                return (Icon)icon.Clone();
+            }
+            finally
+            {
+                DestroyIcon(hIcon);
+            }
         }
 
         public void Dispose()
         {
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
-            hotkey?.Dispose();
-            overlayWindow?.Dispose();
+            DisposeHotkey();
+            if (overlayWindow != null)
+            {
+                overlayWindow.ScreenshotTaken -= OnScreenshotTaken;
+                overlayWindow.FormClosed -= OnOverlayWindowClosed;
+                overlayWindow.Dispose();
+                overlayWindow = null;
+            }
             mainWindow?.Dispose();
             trayIcon?.Dispose();
+            trayAppIcon?.Dispose();
             trayMenu?.Dispose();
         }
     }

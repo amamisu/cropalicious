@@ -40,29 +40,37 @@ namespace Cropalicious
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent?.BackColor ?? Color.Black);
 
-            var rect = new Rectangle(GlowSize, GlowSize, Width - GlowSize * 2, Height - GlowSize * 2);
+            var glowSize = ScaleByFont(GlowSize);
+            var radius = ScaleByFont(6);
+            var rect = new Rectangle(glowSize, glowSize, Width - glowSize * 2, Height - glowSize * 2);
 
             if (glowEnabled && isHovered)
             {
-                for (int i = GlowSize; i > 0; i--)
+                for (int i = glowSize; i > 0; i--)
                 {
-                    int alpha = 50 * i / GlowSize;
+                    int alpha = 50 * i / glowSize;
                     using var glowBrush = new SolidBrush(Color.FromArgb(alpha, BackColor));
-                    var glowRect = new Rectangle(GlowSize - i, GlowSize - i, Width - (GlowSize - i) * 2, Height - (GlowSize - i) * 2);
-                    using var path = CreateRoundedRect(glowRect, 6 + i);
+                    var glowRect = new Rectangle(glowSize - i, glowSize - i, Width - (glowSize - i) * 2, Height - (glowSize - i) * 2);
+                    using var path = CreateRoundedRect(glowRect, radius + i);
                     g.FillPath(glowBrush, path);
                 }
             }
 
             var buttonColor = isHovered ? ControlPaint.Light(BackColor, 0.15f) : BackColor;
             using (var bgBrush = new SolidBrush(buttonColor))
-            using (var path = CreateRoundedRect(rect, 6))
+            using (var path = CreateRoundedRect(rect, radius))
             {
                 g.FillPath(bgBrush, path);
             }
 
             TextRenderer.DrawText(g, Text, Font, rect, ForeColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+        }
+
+        private int ScaleByFont(int value)
+        {
+            const float baseFontHeight = 15f;
+            return Math.Max(1, (int)Math.Round(value * Font.Height / baseFontHeight));
         }
 
         private GraphicsPath CreateRoundedRect(Rectangle rect, int radius)

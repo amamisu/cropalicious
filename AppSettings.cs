@@ -33,8 +33,8 @@ namespace Cropalicious
         public int CaptureHeight { get; set; } = 1024;
         public string OutputFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Cropalicious");
         public List<CustomSize> CustomSizes { get; set; } = new List<CustomSize>();
-        public int WindowWidth { get; set; } = 600;
-        public int WindowHeight { get; set; } = 400;
+        public int WindowWidth { get; set; } = 620;
+        public int WindowHeight { get; set; } = 500;
         public int WindowX { get; set; } = -1;
         public int WindowY { get; set; } = -1;
         public bool StayOnTop { get; set; } = false;

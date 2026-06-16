@@ -9,8 +9,7 @@ namespace Cropalicious
     {
         public AppSettings Settings { get; private set; }
         
-        private ComboBox hotkeyModifiersCombo = null!;
-        private ComboBox hotkeyKeyCombo = null!;
+        private TextBox hotkeyTextBox = null!;
         private ComboBox hotkeyModeCombo = null!;
         private NumericUpDown widthUpDown = null!;
         private NumericUpDown heightUpDown = null!;
@@ -24,6 +23,8 @@ namespace Cropalicious
         private CheckBox continuousCaptureCheckBox = null!;
         private CheckBox showNotificationsCheckBox = null!;
         private ComboBox themeCombo = null!;
+        private Keys selectedHotkeyKey;
+        private Keys selectedHotkeyModifiers;
 
         public SettingsForm(AppSettings currentSettings)
         {
@@ -52,90 +53,84 @@ namespace Cropalicious
         private void InitializeComponent()
         {
             Text = "Cropalicious Settings";
-            Size = new Size(450, 420);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
 
-            var hotkeyLabel = new Label { Text = "Hotkey:", Location = new Point(15, 20), Size = new Size(80, 23) };
-
-            hotkeyModifiersCombo = new ComboBox
+            var layout = new TableLayoutPanel
             {
-                Location = new Point(100, 17),
-                Size = new Size(120, 23),
-                DropDownStyle = ComboBoxStyle.DropDownList
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                Dock = DockStyle.Fill,
+                Padding = new Padding(ScaleByFont(15))
             };
-            hotkeyModifiersCombo.Items.AddRange(new[] { "Ctrl+Shift", "Ctrl+Alt", "Alt+Shift", "Ctrl", "Alt" });
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-            var plusLabel = new Label { Text = "+", Location = new Point(230, 20), Size = new Size(15, 23) };
-
-            hotkeyKeyCombo = new ComboBox
+            hotkeyTextBox = new TextBox
             {
-                Location = new Point(250, 17),
-                Size = new Size(60, 23),
-                DropDownStyle = ComboBoxStyle.DropDownList
+                MinimumSize = new Size(ScaleByFont(230), ScaleByFont(23)),
+                ReadOnly = true,
+                TabStop = true,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right
             };
-            hotkeyKeyCombo.Items.AddRange(new[] { "C", "X", "S", "A", "Q", "Z", "F1", "F2", "F3", "F4" });
-
-            var hotkeyModeLabel = new Label { Text = "Hotkey Size:", Location = new Point(15, 60), Size = new Size(80, 23) };
+            hotkeyTextBox.KeyDown += OnHotkeyKeyDown;
 
             hotkeyModeCombo = new ComboBox
             {
-                Location = new Point(100, 57),
-                Size = new Size(150, 23),
+                MinimumSize = new Size(ScaleByFont(150), ScaleByFont(23)),
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
             hotkeyModeCombo.Items.AddRange(new[] { "Last preset", "Fixed" });
             hotkeyModeCombo.SelectedIndexChanged += OnHotkeyModeChanged;
 
-            dimensionsLabel = new Label { Text = "Fixed Size:", Location = new Point(15, 95), Size = new Size(80, 23) };
+            dimensionsLabel = CreateSettingsLabel("Fixed Size:");
 
             widthUpDown = new NumericUpDown
             {
-                Location = new Point(100, 92),
-                Size = new Size(70, 23),
+                MinimumSize = new Size(ScaleByFont(80), ScaleByFont(23)),
                 Minimum = 100,
                 Maximum = 4000,
                 Value = 1024
             };
 
-            xLabel = new Label { Text = "×", Location = new Point(180, 95), Size = new Size(15, 23) };
+            xLabel = CreateSettingsLabel("×");
 
             heightUpDown = new NumericUpDown
             {
-                Location = new Point(200, 92),
-                Size = new Size(70, 23),
+                MinimumSize = new Size(ScaleByFont(80), ScaleByFont(23)),
                 Minimum = 100,
                 Maximum = 4000,
                 Value = 1024
             };
 
-            pixelsLabel = new Label { Text = "pixels", Location = new Point(280, 95), Size = new Size(40, 23) };
-
-            var folderLabel = new Label { Text = "Output Folder:", Location = new Point(15, 135), Size = new Size(80, 23) };
+            pixelsLabel = CreateSettingsLabel("pixels");
 
             outputFolderTextBox = new TextBox
             {
-                Location = new Point(100, 132),
-                Size = new Size(240, 23),
-                ReadOnly = true
+                MinimumSize = new Size(ScaleByFont(250), ScaleByFont(23)),
+                ReadOnly = true,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right
             };
 
             browseButton = new Button
             {
                 Text = "...",
-                Location = new Point(350, 132),
-                Size = new Size(30, 23)
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(ScaleByFont(32), ScaleByFont(23)),
+                Padding = new Padding(ScaleByFont(6), 0, ScaleByFont(6), 0)
             };
             browseButton.Click += OnBrowseFolder;
 
-            var snapModeLabel = new Label { Text = "Snap Mode:", Location = new Point(15, 175), Size = new Size(80, 23) };
-
             snapModeCombo = new ComboBox
             {
-                Location = new Point(100, 172),
-                Size = new Size(150, 23),
+                MinimumSize = new Size(ScaleByFont(150), ScaleByFont(23)),
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
             snapModeCombo.Items.AddRange(new[] { "Snap", "Span", "Off (black fill)" });
@@ -143,39 +138,33 @@ namespace Cropalicious
             minimizeToTrayCheckBox = new CheckBox
             {
                 Text = "Minimize to system tray on close",
-                Location = new Point(15, 210),
-                Size = new Size(250, 23)
+                AutoSize = true
             };
 
             continuousCaptureCheckBox = new CheckBox
             {
                 Text = "Continuous capture mode",
-                Location = new Point(15, 240),
-                Size = new Size(250, 23)
+                AutoSize = true
             };
 
             showNotificationsCheckBox = new CheckBox
             {
                 Text = "Show notifications",
-                Location = new Point(15, 270),
-                Size = new Size(250, 23)
+                AutoSize = true
             };
-
-            var themeLabel = new Label { Text = "Theme:", Location = new Point(15, 310), Size = new Size(80, 23) };
 
             themeCombo = new ComboBox
             {
-                Location = new Point(100, 307),
-                Size = new Size(150, 23),
+                MinimumSize = new Size(ScaleByFont(150), ScaleByFont(23)),
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
             themeCombo.Items.AddRange(new[] { "Light", "Dark" });
 
             var versionLabel = new Label
             {
-                Text = "Version 1.1.0.0",
-                Location = new Point(15, 355),
+                Text = "Version 1.2.0.0",
                 AutoSize = true,
+                Anchor = AnchorStyles.Left,
                 ForeColor = SystemColors.GrayText
             };
 
@@ -183,8 +172,10 @@ namespace Cropalicious
             {
                 Text = "OK",
                 DialogResult = DialogResult.OK,
-                Location = new Point(260, 350),
-                Size = new Size(75, 25)
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(ScaleByFont(75), ScaleByFont(25)),
+                Padding = new Padding(ScaleByFont(8), 0, ScaleByFont(8), 0)
             };
             okButton.Click += OnOK;
 
@@ -192,20 +183,115 @@ namespace Cropalicious
             {
                 Text = "Cancel",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(345, 350),
-                Size = new Size(75, 25)
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(ScaleByFont(75), ScaleByFont(25)),
+                Padding = new Padding(ScaleByFont(8), 0, ScaleByFont(8), 0)
             };
 
-            Controls.AddRange(new Control[] {
-                hotkeyLabel, hotkeyModifiersCombo, plusLabel, hotkeyKeyCombo,
-                hotkeyModeLabel, hotkeyModeCombo,
-                dimensionsLabel, widthUpDown, xLabel, heightUpDown, pixelsLabel,
-                folderLabel, outputFolderTextBox, browseButton,
-                snapModeLabel, snapModeCombo,
-                minimizeToTrayCheckBox, continuousCaptureCheckBox, showNotificationsCheckBox,
-                themeLabel, themeCombo,
-                versionLabel, okButton, cancelButton
-            });
+            var dimensionsPanel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.LeftToRight,
+                Margin = CreateRowMargin()
+            };
+            dimensionsPanel.Controls.AddRange(new Control[] { widthUpDown, xLabel, heightUpDown, pixelsLabel });
+
+            var folderPanel = new TableLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                Margin = CreateRowMargin()
+            };
+            folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            folderPanel.Controls.Add(outputFolderTextBox, 0, 0);
+            folderPanel.Controls.Add(browseButton, 1, 0);
+
+            var buttonPanel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.RightToLeft,
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(0, ScaleByFont(12), 0, 0)
+            };
+            buttonPanel.Controls.Add(cancelButton);
+            buttonPanel.Controls.Add(okButton);
+
+            AddRow(layout, "Hotkey:", hotkeyTextBox);
+            AddRow(layout, "Hotkey Size:", hotkeyModeCombo);
+            AddRow(layout, dimensionsLabel, dimensionsPanel);
+            AddRow(layout, "Output Folder:", folderPanel);
+            AddRow(layout, "Snap Mode:", snapModeCombo);
+            AddFullWidthRow(layout, minimizeToTrayCheckBox);
+            AddFullWidthRow(layout, continuousCaptureCheckBox);
+            AddFullWidthRow(layout, showNotificationsCheckBox);
+            AddRow(layout, "Theme:", themeCombo);
+            AddRow(layout, versionLabel, buttonPanel);
+
+            Controls.Add(layout);
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+        }
+
+        private int ScaleByFont(int value)
+        {
+            const float baseFontHeight = 15f;
+            return Math.Max(1, (int)Math.Round(value * Font.Height / baseFontHeight));
+        }
+
+        private Padding CreateRowMargin()
+        {
+            return new Padding(0, 0, 0, ScaleByFont(10));
+        }
+
+        private Label CreateSettingsLabel(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 0, ScaleByFont(12), ScaleByFont(10))
+            };
+        }
+
+        private void AddRow(TableLayoutPanel layout, string labelText, Control control)
+        {
+            AddRow(layout, CreateSettingsLabel(labelText), control);
+        }
+
+        private void AddRow(TableLayoutPanel layout, Control label, Control control)
+        {
+            var row = layout.RowCount++;
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            label.Margin = new Padding(0, 0, ScaleByFont(12), ScaleByFont(10));
+            control.Margin = CreateRowMargin();
+
+            layout.Controls.Add(label, 0, row);
+            layout.Controls.Add(control, 1, row);
+        }
+
+        private void AddFullWidthRow(TableLayoutPanel layout, Control control)
+        {
+            var row = layout.RowCount++;
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            control.Margin = CreateRowMargin();
+            layout.Controls.Add(control, 0, row);
+            layout.SetColumnSpan(control, 2);
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (hotkeyTextBox != null && hotkeyTextBox.Focused && TryApplyHotkey(keyData))
+                return true;
+
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         private void OnHotkeyModeChanged(object? sender, EventArgs e)
@@ -220,10 +306,9 @@ namespace Cropalicious
 
         private void LoadSettings()
         {
-            string modifierText = GetModifierText(Settings.HotkeyModifiers);
-            hotkeyModifiersCombo.SelectedItem = modifierText;
-
-            hotkeyKeyCombo.SelectedItem = Settings.HotkeyKey.ToString();
+            selectedHotkeyKey = Settings.HotkeyKey;
+            selectedHotkeyModifiers = Settings.HotkeyModifiers;
+            UpdateHotkeyTextBox();
 
             hotkeyModeCombo.SelectedIndex = (int)Settings.HotkeyMode;
             widthUpDown.Value = Settings.FixedCaptureWidth;
@@ -239,32 +324,26 @@ namespace Cropalicious
             themeCombo.SelectedIndex = (int)Settings.Theme;
         }
 
-        private string GetModifierText(Keys modifiers)
+        private void OnHotkeyKeyDown(object? sender, KeyEventArgs e)
         {
-            if ((modifiers & Keys.Control) != 0 && (modifiers & Keys.Shift) != 0)
-                return "Ctrl+Shift";
-            if ((modifiers & Keys.Control) != 0 && (modifiers & Keys.Alt) != 0)
-                return "Ctrl+Alt";
-            if ((modifiers & Keys.Alt) != 0 && (modifiers & Keys.Shift) != 0)
-                return "Alt+Shift";
-            if ((modifiers & Keys.Control) != 0)
-                return "Ctrl";
-            if ((modifiers & Keys.Alt) != 0)
-                return "Alt";
-            return "Ctrl+Shift";
+            e.SuppressKeyPress = TryApplyHotkey(e.KeyData);
         }
 
-        private Keys GetModifierKeys(string modifierText)
+        private bool TryApplyHotkey(Keys keyData)
         {
-            return modifierText switch
-            {
-                "Ctrl+Shift" => Keys.Control | Keys.Shift,
-                "Ctrl+Alt" => Keys.Control | Keys.Alt,
-                "Alt+Shift" => Keys.Alt | Keys.Shift,
-                "Ctrl" => Keys.Control,
-                "Alt" => Keys.Alt,
-                _ => Keys.Control | Keys.Shift
-            };
+            var key = keyData & Keys.KeyCode;
+            if (key == Keys.None || HotkeyFormatter.IsModifierKey(key))
+                return true;
+
+            selectedHotkeyKey = key;
+            selectedHotkeyModifiers = keyData & Keys.Modifiers;
+            UpdateHotkeyTextBox();
+            return true;
+        }
+
+        private void UpdateHotkeyTextBox()
+        {
+            hotkeyTextBox.Text = HotkeyFormatter.Format(selectedHotkeyModifiers, selectedHotkeyKey);
         }
 
         private void OnBrowseFolder(object? sender, EventArgs e)
@@ -285,10 +364,8 @@ namespace Cropalicious
         {
             try
             {
-                Settings.HotkeyModifiers = GetModifierKeys(hotkeyModifiersCombo.SelectedItem?.ToString() ?? "Ctrl+Shift");
-                
-                if (Enum.TryParse<Keys>(hotkeyKeyCombo.SelectedItem?.ToString(), out var key))
-                    Settings.HotkeyKey = key;
+                Settings.HotkeyModifiers = selectedHotkeyModifiers;
+                Settings.HotkeyKey = selectedHotkeyKey;
 
                 Settings.HotkeyMode = (HotkeyMode)hotkeyModeCombo.SelectedIndex;
                 Settings.FixedCaptureWidth = (int)widthUpDown.Value;

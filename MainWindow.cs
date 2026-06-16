@@ -17,63 +17,134 @@ namespace Cropalicious
         private Label? outputLabel;
         private Label? hotkeyLabel;
         private ToolTip? toolTip;
-        
-        public event EventHandler<ScreenshotEventArgs>? ScreenshotTaken;
+        private bool boundsRestored;
 
-        private readonly (int width, int height, string name)[] presets = new[]
+        private const int DpiBase = 96;
+        private const int CaptureGridColumns = 3;
+        private const int CardLogicalWidth = 180;
+        private const int CardLogicalHeight = 80;
+        private const int DeleteButtonLogicalSize = 22;
+        private const int DeleteButtonLogicalInset = 10;
+        private const int CustomGridMaxLogicalHeight = 260;
+
+        private static readonly Color PresetCardColor = Color.FromArgb(50, 180, 200);
+        private static readonly Color AddCardColor = Color.FromArgb(160, 200, 50);
+        private static readonly Color CustomCardColor = Color.FromArgb(200, 60, 120);
+        private static readonly Color DeleteButtonColor = Color.FromArgb(180, 50, 50);
+
+        private readonly CapturePreset[] presets =
         {
-            (1024, 1024, "1024×1024\nSquare"),
-            (1216, 832, "1216×832\nWide"),
-            (832, 1216, "832×1216\nTall"),
-            (1344, 768, "1344×768\nUltrawide"),
-            (768, 1344, "768×1344\nUltra Tall")
+            new(1024, 1024, "1024×1024\nSquare"),
+            new(1216, 832, "1216×832\nWide"),
+            new(832, 1216, "832×1216\nTall"),
+            new(1344, 768, "1344×768\nUltrawide"),
+            new(768, 1344, "768×1344\nUltra Tall")
         };
+
+        public event EventHandler<ScreenshotEventArgs>? ScreenshotTaken;
+        public event EventHandler? SettingsDialogOpening;
+        public event EventHandler? SettingsDialogClosed;
+        public event EventHandler? SettingsChanged;
 
         public MainWindow(AppSettings settings)
         {
             this.settings = settings;
             InitializeComponent();
 
-            this.FormClosing += OnFormClosing;
-            this.SizeChanged += OnSizeChanged;
-            this.LocationChanged += OnLocationChanged;
+            FormClosing += OnFormClosing;
+            SizeChanged += OnSizeChanged;
+            LocationChanged += OnLocationChanged;
 
             TopMost = settings.StayOnTop;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (overlayWindow != null)
+                {
+                    overlayWindow.ScreenshotTaken -= OnOverlayScreenshotTaken;
+                    overlayWindow.Dispose();
+                    overlayWindow = null;
+                }
+
+                toolTip?.Dispose();
+                Icon?.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplyMinimumWindowSize();
+            RestoreWindowBounds();
+            UpdateCaptureCardLayout();
+            boundsRestored = true;
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            ApplyMinimumWindowSize();
+            UpdateCaptureCardLayout();
         }
 
         private void InitializeComponent()
         {
             Text = "Cropalicious";
-            Size = new Size(settings.WindowWidth, settings.WindowHeight);
+            AutoScaleDimensions = new SizeF(DpiBase, DpiBase);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScroll = true;
             Icon = CropaliciousApp.CreateAppIcon(32);
-            
-            if (settings.WindowX >= 0 && settings.WindowY >= 0)
-            {
-                StartPosition = FormStartPosition.Manual;
-                Location = new Point(settings.WindowX, settings.WindowY);
-            }
-            else
-            {
-                StartPosition = FormStartPosition.CenterScreen;
-            }
-            
+            StartPosition = FormStartPosition.Manual;
             FormBorderStyle = FormBorderStyle.Sizable;
             Padding = new Padding(20);
 
-            var mainLayout = new TableLayoutPanel
+            var mainLayout = CreateMainLayout();
+            var hintLabel = CreateHintLabel();
+
+            presetsTable = CreateCaptureGrid(new Padding(0, 0, 0, 20));
+            CreatePresetCards();
+
+            customTable = CreateCaptureGrid(Padding.Empty);
+            customScrollPanel = CreateCustomScrollPanel();
+            customScrollPanel.Controls.Add(customTable);
+            RefreshCustomCards();
+
+            mainLayout.Controls.Add(hintLabel, 0, 0);
+            mainLayout.Controls.Add(presetsTable, 0, 1);
+            mainLayout.Controls.Add(customScrollPanel, 0, 2);
+            mainLayout.Controls.Add(CreateBottomPanel(), 0, 3);
+
+            Controls.Add(mainLayout);
+            ApplyTheme();
+            ApplyMinimumWindowSize();
+            UpdateCaptureCardLayout();
+        }
+
+        private TableLayoutPanel CreateMainLayout()
+        {
+            var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 4,
-                AutoSize = true
+                RowCount = 4
             };
 
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var hintLabel = new Label
+            return layout;
+        }
+
+        private Label CreateHintLabel()
+        {
+            return new Label
             {
                 Text = "Left click to capture, right click or ESC to cancel",
                 Font = new Font("Segoe UI", 9, FontStyle.Regular),
@@ -83,160 +154,255 @@ namespace Cropalicious
                 Margin = new Padding(0, 0, 0, 15),
                 TextAlign = ContentAlignment.MiddleCenter
             };
+        }
 
-            presetsTable = new TableLayoutPanel
+        private TableLayoutPanel CreateCaptureGrid(Padding margin)
+        {
+            var grid = new TableLayoutPanel
             {
-                ColumnCount = 3,
-                RowCount = 2,
+                ColumnCount = CaptureGridColumns,
                 AutoSize = true,
-                Margin = new Padding(0, 0, 0, 20)
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = margin
             };
 
-            for (int i = 0; i < 3; i++)
-                presetsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
-            for (int i = 0; i < 2; i++)
-                presetsTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            ConfigureCaptureGridColumns(grid);
+            return grid;
+        }
 
-            CreatePresetButtons();
-
-            customTable = new TableLayoutPanel
-            {
-                ColumnCount = 3,
-                AutoSize = true,
-                Margin = new Padding(0)
-            };
-
-            for (int i = 0; i < 3; i++)
-                customTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
-
-            customScrollPanel = new Panel
+        private Panel CreateCustomScrollPanel()
+        {
+            var panel = new Panel
             {
                 AutoScroll = true,
-                MaximumSize = new Size(0, 260),
-                AutoSize = true,
+                AutoSize = false,
+                MaximumSize = new Size(0, ScaleLogical(CustomGridMaxLogicalHeight)),
                 Margin = new Padding(0, 0, 0, 10),
                 Padding = new Padding(0, 0, 20, 0)
             };
-            customScrollPanel.HorizontalScroll.Enabled = false;
-            customScrollPanel.HorizontalScroll.Visible = false;
-            customScrollPanel.Controls.Add(customTable);
 
-            CreateCustomButtons();
-
-            var bottomPanel = CreateBottomPanel();
-
-            mainLayout.Controls.Add(hintLabel, 0, 0);
-            mainLayout.Controls.Add(presetsTable, 0, 1);
-            mainLayout.Controls.Add(customScrollPanel, 0, 2);
-            mainLayout.Controls.Add(bottomPanel, 0, 3);
-
-            Controls.Add(mainLayout);
-            ApplyTheme();
-
-            mainLayout.PerformLayout();
-            var preferredSize = mainLayout.PreferredSize;
-            MinimumSize = new Size(
-                preferredSize.Width + Padding.Horizontal + SystemInformation.FrameBorderSize.Width * 2 + 20,
-                preferredSize.Height + Padding.Vertical + SystemInformation.CaptionHeight + SystemInformation.FrameBorderSize.Height * 2 + 20
-            );
+            panel.HorizontalScroll.Enabled = false;
+            panel.HorizontalScroll.Visible = false;
+            return panel;
         }
 
-        private void CreatePresetButtons()
+        private void CreatePresetCards()
         {
+            ConfigureCaptureGridRows(presetsTable!, 2);
             bool isDark = settings.Theme == AppTheme.Dark;
 
             for (int i = 0; i < presets.Length; i++)
             {
                 var preset = presets[i];
-                int col = i % 3;
-                int row = i / 3;
-
-                var button = new GlowButton
-                {
-                    Text = preset.name,
-                    Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                    BackColor = Color.FromArgb(50, 180, 200),
-                    ForeColor = Color.White,
-                    Size = new Size(180, 80),
-                    Margin = new Padding(0),
-                    Tag = (preset.width, preset.height)
-                };
-                button.SetGlow(isDark);
-
-                button.Click += OnPresetButtonClick;
-                presetsTable!.Controls.Add(button, col, row);
+                var button = CreateCaptureCard(preset.Name, PresetCardColor, (preset.Width, preset.Height), OnPresetButtonClick, isDark);
+                presetsTable!.Controls.Add(button, i % CaptureGridColumns, i / CaptureGridColumns);
             }
 
-            var addButton = new GlowButton
-            {
-                Text = "+\nAdd Custom",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                BackColor = Color.FromArgb(160, 200, 50),
-                ForeColor = Color.White,
-                Size = new Size(180, 80),
-                Margin = new Padding(0)
-            };
-            addButton.SetGlow(isDark);
-            addButton.Click += OnAddCustomClick;
+            var addButton = CreateCaptureCard("+\nAdd Custom", AddCardColor, null, OnAddCustomClick, isDark);
             presetsTable!.Controls.Add(addButton, 2, 1);
         }
 
-        private void CreateCustomButtons()
+        private void RefreshCustomCards()
         {
-            customTable!.Controls.Clear();
-            customTable.RowStyles.Clear();
+            customTable!.SuspendLayout();
 
-            if (settings.CustomSizes.Count == 0)
+            try
             {
-                customTable.Visible = false;
+                ClearControls(customTable.Controls);
+
+                int rows = (settings.CustomSizes.Count + CaptureGridColumns - 1) / CaptureGridColumns;
+                ConfigureCaptureGridRows(customTable, rows);
+                customTable.Visible = settings.CustomSizes.Count > 0;
+
+                if (settings.CustomSizes.Count > 0)
+                {
+                    bool isDark = settings.Theme == AppTheme.Dark;
+
+                    for (int i = 0; i < settings.CustomSizes.Count; i++)
+                    {
+                        var custom = settings.CustomSizes[i];
+                        var text = $"{custom.Width}×{custom.Height}\n{custom.Name}";
+                        var button = CreateCaptureCard(text, CustomCardColor, (custom.Width, custom.Height), OnPresetButtonClick, isDark);
+                        button.Controls.Add(CreateDeleteButton(i));
+                        customTable.Controls.Add(button, i % CaptureGridColumns, i / CaptureGridColumns);
+                    }
+                }
+            }
+            finally
+            {
+                customTable.ResumeLayout(true);
+            }
+
+            UpdateCaptureCardLayout();
+        }
+
+        private GlowButton CreateCaptureCard(string text, Color color, object? tag, EventHandler click, bool isDark)
+        {
+            var size = GetCurrentCardSize();
+            var button = new GlowButton
+            {
+                Text = text,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                BackColor = color,
+                ForeColor = Color.White,
+                AutoSize = false,
+                Size = size,
+                MinimumSize = size,
+                MaximumSize = size,
+                Margin = Padding.Empty,
+                Tag = tag,
+                UseVisualStyleBackColor = false
+            };
+
+            button.SetGlow(isDark);
+            button.Click += click;
+            return button;
+        }
+
+        private Button CreateDeleteButton(int index)
+        {
+            var size = ScaleLogical(DeleteButtonLogicalSize);
+            var button = new Button
+            {
+                Text = "×",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                BackColor = DeleteButtonColor,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(size, size),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Tag = index,
+                UseVisualStyleBackColor = false
+            };
+
+            button.FlatAppearance.BorderSize = 0;
+            button.Click += OnDeleteCustomClick;
+            return button;
+        }
+
+        private void ConfigureCaptureGridRows(TableLayoutPanel grid, int rows)
+        {
+            grid.RowStyles.Clear();
+            grid.RowCount = rows;
+
+            for (int i = 0; i < rows; i++)
+                grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
+
+        private static void ConfigureCaptureGridColumns(TableLayoutPanel grid)
+        {
+            grid.ColumnStyles.Clear();
+
+            for (int i = 0; i < CaptureGridColumns; i++)
+                grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / CaptureGridColumns));
+        }
+
+        private void UpdateCaptureCardLayout()
+        {
+            var cardSize = GetCurrentCardSize();
+            bool isDark = settings.Theme == AppTheme.Dark;
+
+            foreach (var card in CaptureCards())
+            {
+                card.AutoSize = false;
+                card.Size = cardSize;
+                card.MinimumSize = cardSize;
+                card.MaximumSize = cardSize;
+                card.SetGlow(isDark);
+                PositionDeleteButtons(card);
+                card.Invalidate();
+            }
+
+            UpdateCustomGridHost();
+        }
+
+        private IEnumerable<GlowButton> CaptureCards()
+        {
+            if (presetsTable != null)
+            {
+                foreach (var card in presetsTable.Controls.OfType<GlowButton>())
+                    yield return card;
+            }
+
+            if (customTable != null)
+            {
+                foreach (var card in customTable.Controls.OfType<GlowButton>())
+                    yield return card;
+            }
+        }
+
+        private void PositionDeleteButtons(GlowButton card)
+        {
+            var size = ScaleLogical(DeleteButtonLogicalSize);
+            var inset = ScaleLogical(DeleteButtonLogicalInset);
+
+            foreach (var button in card.Controls.OfType<Button>())
+            {
+                button.Size = new Size(size, size);
+                button.Location = new Point(card.Width - size - inset, 0);
+            }
+        }
+
+        private void UpdateCustomGridHost()
+        {
+            if (customScrollPanel == null || customTable == null)
+                return;
+
+            bool hasCustomSizes = settings.CustomSizes.Count > 0;
+            customTable.Visible = hasCustomSizes;
+            customScrollPanel.Visible = hasCustomSizes;
+
+            if (!hasCustomSizes)
+            {
+                customTable.MinimumSize = Size.Empty;
+                customScrollPanel.MinimumSize = Size.Empty;
+                customScrollPanel.Size = Size.Empty;
                 return;
             }
 
-            customTable.Visible = true;
-            bool isDark = settings.Theme == AppTheme.Dark;
-            int rows = (settings.CustomSizes.Count + 2) / 3;
-            customTable.RowCount = rows;
+            customTable.PerformLayout();
+            var tableSize = customTable.GetPreferredSize(Size.Empty);
+            var maxHeight = ScaleLogical(CustomGridMaxLogicalHeight);
+            var panelHeight = Math.Min(tableSize.Height, maxHeight);
+            var needsVerticalScroll = tableSize.Height > maxHeight;
+            var panelWidth = tableSize.Width + customScrollPanel.Padding.Horizontal;
 
-            for (int i = 0; i < rows; i++)
-                customTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            if (needsVerticalScroll)
+                panelWidth += SystemInformation.VerticalScrollBarWidth;
 
-            for (int i = 0; i < settings.CustomSizes.Count; i++)
-            {
-                var custom = settings.CustomSizes[i];
-                int col = i % 3;
-                int row = i / 3;
-                int index = i;
+            customScrollPanel.MaximumSize = new Size(0, maxHeight);
+            customTable.MinimumSize = tableSize;
+            customScrollPanel.Size = new Size(panelWidth, panelHeight);
+            customScrollPanel.MinimumSize = new Size(panelWidth, panelHeight);
+            customScrollPanel.PerformLayout();
+            customScrollPanel.Invalidate(true);
+        }
 
-                var button = new GlowButton
-                {
-                    Text = $"{custom.Width}×{custom.Height}\n{custom.Name}",
-                    Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                    BackColor = Color.FromArgb(200, 60, 120),
-                    ForeColor = Color.White,
-                    Size = new Size(180, 80),
-                    Margin = new Padding(0),
-                    Tag = (custom.Width, custom.Height)
-                };
-                button.SetGlow(isDark);
-                button.Click += OnPresetButtonClick;
+        private Size GetCurrentCardSize()
+        {
+            if (!IsHandleCreated)
+                return new Size(CardLogicalWidth, CardLogicalHeight);
 
-                var deleteButton = new Button
-                {
-                    Text = "×",
-                    Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                    BackColor = Color.FromArgb(180, 50, 50),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Size = new Size(22, 22),
-                    Location = new Point(148, 0),
-                    Tag = index
-                };
-                deleteButton.FlatAppearance.BorderSize = 0;
-                deleteButton.Click += OnDeleteCustomClick;
+            return new Size(
+                ScaleLogical(CardLogicalWidth),
+                ScaleLogical(CardLogicalHeight)
+            );
+        }
 
-                button.Controls.Add(deleteButton);
-                customTable.Controls.Add(button, col, row);
-            }
+        private int ScaleLogical(int value)
+        {
+            var dpi = IsHandleCreated ? DeviceDpi : DpiBase;
+            return Math.Max(1, (int)Math.Round(value * dpi / (float)DpiBase));
+        }
+
+        private Size ScaleLogicalSize(Size size)
+        {
+            return new Size(ScaleLogical(size.Width), ScaleLogical(size.Height));
+        }
+
+        private void ApplyMinimumWindowSize()
+        {
+            MinimumSize = ScaleLogicalSize(new Size(560, 360));
         }
 
         private void OnDeleteCustomClick(object? sender, EventArgs e)
@@ -250,15 +416,9 @@ namespace Cropalicious
                 {
                     settings.CustomSizes.RemoveAt(index);
                     settings.Save();
-                    CreateCustomButtons();
-                    AdjustWindowSize();
+                    RefreshCustomCards();
                 }
             }
-        }
-
-        private void AdjustWindowSize()
-        {
-            customScrollPanel!.Visible = settings.CustomSizes.Count > 0;
         }
 
         private Panel CreateBottomPanel()
@@ -295,6 +455,7 @@ namespace Cropalicious
                 ColumnCount = 2,
                 RowCount = 1,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0, 0, 0, 10)
             };
             outputButtonsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -305,7 +466,7 @@ namespace Cropalicious
             openFolderButton.Click += OnOpenFolderClick;
 
             var changeFolderButton = CreateSmallButton("Change Folder");
-            changeFolderButton.Margin = new Padding(0);
+            changeFolderButton.Margin = Padding.Empty;
             changeFolderButton.Click += OnChangeFolderClick;
 
             outputButtonsPanel.Controls.Add(openFolderButton, 0, 0);
@@ -342,18 +503,95 @@ namespace Cropalicious
 
         private void ApplyTheme() => Theme.Apply(this, settings.Theme);
 
-        private void RebuildButtons()
+        private void RefreshCardGlow()
         {
-            presetsTable!.Controls.Clear();
-            CreatePresetButtons();
-            CreateCustomButtons();
+            bool isDark = settings.Theme == AppTheme.Dark;
+
+            foreach (var card in CaptureCards())
+            {
+                card.SetGlow(isDark);
+                card.Invalidate();
+            }
         }
 
         private Button CreateSmallButton(string text)
         {
-            var button = new Button { Text = text, Size = new Size(100, 25) };
+            var button = new Button
+            {
+                Text = text,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(100, 25),
+                Padding = new Padding(8, 0, 8, 0)
+            };
+
             Theme.StyleButton(button, settings.Theme);
             return button;
+        }
+
+        private void RestoreWindowBounds()
+        {
+            var hasSavedLocation = settings.WindowX != -1 || settings.WindowY != -1;
+            var savedLocation = new Point(settings.WindowX, settings.WindowY);
+            var targetScreen = hasSavedLocation ? FindScreenContaining(savedLocation) : null;
+            var screen = targetScreen ?? Screen.PrimaryScreen ?? Screen.AllScreens[0];
+
+            if (targetScreen != null)
+                Location = savedLocation;
+
+            var size = ScaleSize(new Size(settings.WindowWidth, settings.WindowHeight), DpiBase, DeviceDpi);
+            size = new Size(
+                Math.Max(MinimumSize.Width, Math.Min(size.Width, screen.WorkingArea.Width)),
+                Math.Max(MinimumSize.Height, Math.Min(size.Height, screen.WorkingArea.Height))
+            );
+
+            var bounds = targetScreen != null
+                ? new Rectangle(savedLocation, size)
+                : CenterIn(screen.WorkingArea, size);
+
+            Bounds = ClampToWorkingArea(bounds, screen.WorkingArea);
+        }
+
+        private static Screen? FindScreenContaining(Point point)
+        {
+            return Screen.AllScreens.FirstOrDefault(screen => screen.WorkingArea.Contains(point));
+        }
+
+        private static Rectangle CenterIn(Rectangle area, Size size)
+        {
+            return new Rectangle(
+                area.Left + Math.Max(0, (area.Width - size.Width) / 2),
+                area.Top + Math.Max(0, (area.Height - size.Height) / 2),
+                size.Width,
+                size.Height
+            );
+        }
+
+        private static Rectangle ClampToWorkingArea(Rectangle bounds, Rectangle workingArea)
+        {
+            var width = Math.Min(bounds.Width, workingArea.Width);
+            var height = Math.Min(bounds.Height, workingArea.Height);
+            var x = Math.Max(workingArea.Left, Math.Min(bounds.X, workingArea.Right - width));
+            var y = Math.Max(workingArea.Top, Math.Min(bounds.Y, workingArea.Bottom - height));
+
+            return new Rectangle(x, y, width, height);
+        }
+
+        private static Size ScaleSize(Size size, int sourceDpi, int targetDpi)
+        {
+            return new Size(
+                Math.Max(1, (int)Math.Round(size.Width * targetDpi / (float)sourceDpi)),
+                Math.Max(1, (int)Math.Round(size.Height * targetDpi / (float)sourceDpi))
+            );
+        }
+
+        private static void ClearControls(Control.ControlCollection controls)
+        {
+            var existingControls = controls.Cast<Control>().ToArray();
+            controls.Clear();
+
+            foreach (var control in existingControls)
+                control.Dispose();
         }
 
         private void OnStayOnTopChanged(object? sender, EventArgs e)
@@ -381,19 +619,18 @@ namespace Cropalicious
         {
             using var dialog = new CustomSizeDialog(settings.CustomSizes.Count, settings.Theme);
             dialog.TopMost = TopMost;
+
             if (dialog.ShowDialog(this) == DialogResult.OK)
             {
-                var customSize = new CustomSize
+                settings.CustomSizes.Add(new CustomSize
                 {
                     Width = dialog.CustomWidth,
                     Height = dialog.CustomHeight,
                     Name = dialog.CustomName
-                };
+                });
 
-                settings.CustomSizes.Add(customSize);
                 settings.Save();
-                CreateCustomButtons();
-                AdjustWindowSize();
+                RefreshCustomCards();
             }
         }
 
@@ -404,10 +641,9 @@ namespace Cropalicious
                 overlayWindow = new OverlayWindow(settings);
                 overlayWindow.ScreenshotTaken += OnOverlayScreenshotTaken;
                 overlayWindow.Show();
+
                 if (!settings.StayOnTop)
-                {
                     WindowState = FormWindowState.Minimized;
-                }
             }
         }
 
@@ -455,48 +691,54 @@ namespace Cropalicious
 
         private void OnSettingsClick(object? sender, EventArgs e) => OpenSettings();
 
-        public event EventHandler? SettingsChanged;
-
         public void OpenSettings()
         {
-            using var settingsForm = new SettingsForm(settings);
-            settingsForm.TopMost = TopMost;
-            if (settingsForm.ShowDialog(this) == DialogResult.OK)
+            SettingsDialogOpening?.Invoke(this, EventArgs.Empty);
+
+            try
             {
-                settings.HotkeyKey = settingsForm.Settings.HotkeyKey;
-                settings.HotkeyModifiers = settingsForm.Settings.HotkeyModifiers;
-                settings.HotkeyMode = settingsForm.Settings.HotkeyMode;
-                settings.FixedCaptureWidth = settingsForm.Settings.FixedCaptureWidth;
-                settings.FixedCaptureHeight = settingsForm.Settings.FixedCaptureHeight;
-                settings.SnapMode = settingsForm.Settings.SnapMode;
-                settings.MinimizeToTray = settingsForm.Settings.MinimizeToTray;
-                settings.ContinuousCaptureMode = settingsForm.Settings.ContinuousCaptureMode;
-                settings.ShowNotifications = settingsForm.Settings.ShowNotifications;
-                settings.Theme = settingsForm.Settings.Theme;
-                settings.Save();
-                ApplyTheme();
-                RebuildButtons();
-                UpdateHotkeyLabel();
-                SettingsChanged?.Invoke(this, EventArgs.Empty);
+                using var settingsForm = new SettingsForm(settings);
+                settingsForm.TopMost = TopMost;
+
+                if (settingsForm.ShowDialog(this) == DialogResult.OK)
+                {
+                    settings.HotkeyKey = settingsForm.Settings.HotkeyKey;
+                    settings.HotkeyModifiers = settingsForm.Settings.HotkeyModifiers;
+                    settings.HotkeyMode = settingsForm.Settings.HotkeyMode;
+                    settings.FixedCaptureWidth = settingsForm.Settings.FixedCaptureWidth;
+                    settings.FixedCaptureHeight = settingsForm.Settings.FixedCaptureHeight;
+                    settings.SnapMode = settingsForm.Settings.SnapMode;
+                    settings.MinimizeToTray = settingsForm.Settings.MinimizeToTray;
+                    settings.ContinuousCaptureMode = settingsForm.Settings.ContinuousCaptureMode;
+                    settings.ShowNotifications = settingsForm.Settings.ShowNotifications;
+                    settings.OutputFolder = settingsForm.Settings.OutputFolder;
+                    settings.Theme = settingsForm.Settings.Theme;
+                    settings.Save();
+                    ApplyTheme();
+                    RefreshCardGlow();
+                    UpdateOutputLabel();
+                    UpdateHotkeyLabel();
+                    SettingsChanged?.Invoke(this, EventArgs.Empty);
+                }
+            }
+            finally
+            {
+                SettingsDialogClosed?.Invoke(this, EventArgs.Empty);
             }
         }
 
         private void UpdateHotkeyLabel()
         {
-            if (hotkeyLabel == null) return;
-            hotkeyLabel.Text = $"Hotkey: {GetHotkeyLabelText()}";
+            if (hotkeyLabel != null)
+                hotkeyLabel.Text = $"Hotkey: {GetHotkeyLabelText()}";
         }
 
         private string GetHotkeyLabelText()
         {
             if (settings.HotkeyMode == HotkeyMode.FixedSize)
-            {
                 return $"{GetHotkeyText()} (fixed: {settings.FixedCaptureWidth}×{settings.FixedCaptureHeight})";
-            }
-            else
-            {
-                return $"{GetHotkeyText()} (last-used: {settings.CaptureWidth}×{settings.CaptureHeight})";
-            }
+
+            return $"{GetHotkeyText()} (last-used: {settings.CaptureWidth}×{settings.CaptureHeight})";
         }
 
         private void OnFormClosing(object? sender, FormClosingEventArgs e)
@@ -514,43 +756,30 @@ namespace Cropalicious
 
         private void OnSizeChanged(object? sender, EventArgs e)
         {
-            if (WindowState == FormWindowState.Normal)
-            {
-                SaveWindowState();
-            }
+            SaveWindowState();
         }
 
         private void OnLocationChanged(object? sender, EventArgs e)
         {
-            if (WindowState == FormWindowState.Normal)
-            {
-                SaveWindowState();
-            }
+            SaveWindowState();
         }
 
         private void SaveWindowState()
         {
-            if (WindowState == FormWindowState.Normal)
-            {
-                settings.WindowWidth = Width;
-                settings.WindowHeight = Height;
-                settings.WindowX = Location.X;
-                settings.WindowY = Location.Y;
-                settings.Save();
-            }
+            if (!boundsRestored || WindowState != FormWindowState.Normal)
+                return;
+
+            var logical = ScaleSize(Size, DeviceDpi, DpiBase);
+            settings.WindowWidth = logical.Width;
+            settings.WindowHeight = logical.Height;
+            settings.WindowX = Location.X;
+            settings.WindowY = Location.Y;
+            settings.Save();
         }
 
         private string GetHotkeyText()
         {
-            var parts = new List<string>();
-
-            if ((settings.HotkeyModifiers & Keys.Control) != 0) parts.Add("Ctrl");
-            if ((settings.HotkeyModifiers & Keys.Alt) != 0) parts.Add("Alt");
-            if ((settings.HotkeyModifiers & Keys.Shift) != 0) parts.Add("Shift");
-
-            parts.Add(settings.HotkeyKey.ToString());
-
-            return string.Join("+", parts);
+            return HotkeyFormatter.Format(settings.HotkeyModifiers, settings.HotkeyKey);
         }
 
         private static string TruncatePath(string path, int maxLength)
@@ -558,8 +787,8 @@ namespace Cropalicious
             if (string.IsNullOrEmpty(path) || path.Length <= maxLength)
                 return path;
 
-            // Try to show drive + ... + last folder/filename
             var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
             if (parts.Length <= 2)
                 return path.Substring(0, maxLength - 3) + "...";
 
@@ -580,5 +809,7 @@ namespace Cropalicious
                 toolTip?.SetToolTip(outputLabel, settings.OutputFolder);
             }
         }
+
+        private readonly record struct CapturePreset(int Width, int Height, string Name);
     }
 }
